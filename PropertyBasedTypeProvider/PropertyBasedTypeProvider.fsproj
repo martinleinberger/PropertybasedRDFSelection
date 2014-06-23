@@ -57,7 +57,6 @@
     <Compile Include="ProvidedTypes\Code\ProvidedTypes.fs" />
     <Compile Include="ProvidedTypes\Code\Debug.fs" />
     <Compile Include="Wrapper.fs" />
-    <Compile Include="Store.fs" />
     <Compile Include="Provider.fs" />
     <None Include="packages.config" />
     <None Include="app.config" />

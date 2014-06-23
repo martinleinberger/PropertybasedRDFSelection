@@ -7,8 +7,8 @@ open System.Reflection
 open Wrapper
 open SPARQLHttpProtocol
 
-//        let mutable connection : Store option = None
-//        let mutable endpointUrl' = ""
+type Property = string
+
 [<TypeProvider>]
 type RDFTypeProvider(config : TypeProviderConfig) as this = 
     class
@@ -16,7 +16,7 @@ type RDFTypeProvider(config : TypeProviderConfig) as this =
         let ns = "Uniko.West.PropertyBased"
         let asm = Assembly.GetExecutingAssembly()
         let provTy = ProvidedTypeDefinition(asm, ns, "RDFStore", Some typeof<obj>)
-        let mutable url : string option = None
+        let mutable conInfo : ConnectionInfo option = None
         let convertToProperty (p : Property) = 
             ProvidedProperty
                 (propertyName = p, propertyType = typedefof<seq<_>>.MakeGenericType(typeof<string>), 
@@ -25,53 +25,55 @@ type RDFTypeProvider(config : TypeProviderConfig) as this =
         let createUnspecifcType (properties : Property seq) = 
             let t = ProvidedTypeDefinition("Untyped", baseType = Some typeof<RDFResource>)
             let query = makeSubjectQuery properties
-            let s = url.Value
+            let s = ConnectionInfo.Serialize(conInfo.Value)
             t.AddMember
                 (ProvidedProperty
                      ("Extension", typedefof<seq<_>>.MakeGenericType(t), IsStatic = true, 
                       GetterCode = fun _ -> <@@ RDFResource.Extension(query, s) @@>))
             t
         
-//        let makeInstantiableTypes (properties : Property seq) = 
-//            let typed = ProvidedTypeDefinition(className = "Typed", baseType = Some typeof<obj>)
-//            let query = Wrapper.makeSubjectQuery properties
-//            let s = url.Value
-//            typed.AddMember
-//                (ProvidedProperty
-//                     (propertyName = "Extension", propertyType = typedefof<seq<_>>.MakeGenericType(typed), 
-//                      IsStatic = true, GetterCode = fun _ -> <@@ RDFResource.Extension(query, s) @@>))
-//            let ctor = 
-//                ProvidedConstructor(parameters = [ new ProvidedParameter("instanceUri", typeof<string>) ], 
-//                                    InvokeCode = fun args -> 
-//                                        <@@ let instanceUri = (%%args.[0] : string)
-//                                            new RDFResource(instanceUri, s) @@>)
-//            
-//            let properties' = 
-//                properties
-//                |> Seq.map convertToProperty
-//                |> Seq.toList
-//            
-//            typed.AddMember ctor
-//            typed.AddMembers properties'
-//            [ typed ]
-//        
-        let rec makeNestedTypes (previouslyChosen : string list) = 
-            ConnectionManager.GetConnection(url.Value).Query(makePropertyQuery previouslyChosen)
+        let createIntersectionTypes (previouslyChosen : Property list) = 
+            let s = ConnectionInfo.Serialize(conInfo.Value)
+            let container = ProvidedTypeDefinition("Typed", baseType=None)
+            container.AddMembersDelayed( fun _ ->
+                ConnectionManager.GetConnection(conInfo.Value).Query(makeTypeQuery previouslyChosen) 
+                |> Seq.map( fun x -> x.["type"].Value)
+                |> Seq.map( fun classUri ->
+                    let t = ProvidedTypeDefinition(classUri, baseType=None)
+                    let extensionQuery = makeSubjectQueryWithType previouslyChosen classUri
+                    t.AddMember 
+                        (ProvidedProperty("Extension", typedefof<seq<_>>.MakeGenericType(t),
+                            IsStatic=true, GetterCode = fun _ -> <@@ RDFResource.Extension(extensionQuery,s) @@>))
+
+                    ConnectionManager.GetConnection(conInfo.Value).Query(makeClassPropertiesQuery classUri)
+                    |> Seq.map(fun x -> x.["property"].Value)
+                    |> Set.ofSeq
+                    |> Set.union (previouslyChosen |> Set.ofList)
+                    |> Seq.map convertToProperty
+                    |> Seq.iter t.AddMember
+
+                    t :> MemberInfo
+                )
+                |> Seq.toList
+            )
+            container
+  
+        let rec makeNestedTypes (previouslyChosen : Property list) = 
+            ConnectionManager.GetConnection(conInfo.Value).Query(makePropertyQuery previouslyChosen)
             |> Seq.map (fun x -> x.["p"].Value)
             |> filter previouslyChosen
             |> Seq.map (fun property -> 
                    let x = ProvidedTypeDefinition(className = property, baseType = None)
-//                   x.AddMembers(makeInstiableTypes (property :: previouslyChosen))
-                   x.AddMemberDelayed(fun _ -> createUnspecifcType (List.Cons(property, previouslyChosen)))
-//                   x.AddMembersDelayed(fun _ -> makeNestedTypes (List.Cons(property, previouslyChosen)))
+                   let updated_list = List.Cons(property, previouslyChosen)
+                   x.AddMemberDelayed(fun _ -> createUnspecifcType updated_list)
+                   x.AddMemberDelayed(fun _ -> createIntersectionTypes updated_list)
+                   x.AddMembersDelayed(fun _ -> makeNestedTypes updated_list)
                    x :> MemberInfo)
             |> Seq.toList
-        
-        //connection.Value.Properties previouslyChosen
+
         let buildTypes (typeName : string) (endPointUrl : string) = 
-            if not (ConnectionManager.Contains endPointUrl) then 
-                ConnectionManager.AddConnection endPointUrl (new SPARQLHttpEndpoint(endPointUrl))
-                url <- Some endPointUrl
+            if conInfo.IsNone then
+                conInfo <- Some {Uri=endPointUrl; Prefixes=List.empty<string*string>}
             let t = ProvidedTypeDefinition(className = typeName, baseType = None)
             provTy.AddMember t
             t.AddMembersDelayed(fun _ -> makeNestedTypes [])
