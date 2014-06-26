@@ -5,13 +5,7 @@ open System
 open System.Text.RegularExpressions
 open System.Collections.Generic
 
-//type ConnectionManager() = 
-//    class
-//        static let connections = new Dictionary<string, SPARQLHttpEndpoint>()
-//        static member AddConnection url connection = connections.[url] <- connection
-//        static member GetConnection url = connections.[url]
-//        static member Contains url = connections.ContainsKey url
-//    end
+
 
 type ConnectionInfo = 
     { Uri : string
@@ -43,7 +37,8 @@ type ConnectionManager() =
             if not (connections.ContainsKey serializedConInfo) then
                 let conInfo = ConnectionInfo.Deserialize(serializedConInfo)
                 let con = new SPARQLHttpEndpoint(conInfo.Uri)
-                conInfo.Prefixes |> Seq.iter con.AddPrefix
+                let sx = con.Namespaces
+                //conInfo.Prefixes |> Seq.iter con.AddPrefix
                 connections.Add (serializedConInfo,con)
 
             connections.[serializedConInfo]
@@ -74,10 +69,9 @@ type RDFResource(instanceUri : string, serializedConinfo : string) =
             with get(propertyUri) : string list = 
                 let instanceUri', propertyUri' = "<" + instanceUri + ">", "<" + propertyUri + ">"
                 let query = "SELECT ?value WHERE { " + instanceUri' + " " + propertyUri' + " ?value . }"
-                //printfn "%A" query
                 getCon(serializedConinfo).Query(query)
                 |> Seq.map (fun x -> x.["value"].Value)
-                |> Seq.toList //let findInstances (query:string) : RDFResource seq=  
+                |> Seq.toList
                               
     end
 
@@ -109,3 +103,9 @@ let makeTypeQuery (properties : string seq) =
 
 let makeClassPropertiesQuery (classUri : string) = 
     "SELECT ?property WHERE { ?property <http://www.w3.org/2000/01/rdf-schema#domain> <"+classUri+"> . }"
+
+let makeProbingQuery (propertyUri : string) = 
+    "SELECT ?object WHERE { ?subject <" + propertyUri + "> ?object . } LIMIT 1"
+
+
+
